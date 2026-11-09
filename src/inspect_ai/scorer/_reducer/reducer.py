@@ -90,7 +90,9 @@ def mean_score(value_to_float: ValueToFloat = value_to_float()) -> ScoreReducer:
     mean instead of being converted to `0.0`. A key that is `None` on every
     score stays `None`, so a metric can still apply its missing-value
     behavior. The same rule is used by the other dictionary statistics
-    (`median_score`, `pass_at`, and `pass_k`).
+    (`median_score`, `pass_at`, and `pass_k`), by `max_score`, and by the
+    counting reducers (`mode_score`, `majority_score`, and `at_least`), where
+    a `None` is not a vote.
 
     Args:
        value_to_float: Function to convert the value to a float
@@ -267,13 +269,15 @@ def max_score(value_to_float: ValueToFloat = value_to_float()) -> ScoreReducer:
             dict_result: dict[str, str | int | float | bool | None] = {}
             keys = dict_scores[0].value.keys()  # type: ignore
             for key in keys:
+                # None is missing (see mean_score): converting it would make
+                # it 0.0, which beats a negative value and ties with 0.0
                 key_values = [
                     cast(str | int | float | bool, score.value[key])  # type: ignore
                     for score in dict_scores
-                    if _is_reducible(score.value[key])  # type: ignore
+                    if _has_value(score.value[key])  # type: ignore
                 ]
                 if len(key_values) == 0:
-                    dict_result[key] = float("nan")
+                    dict_result[key] = _missing_key_value(dict_scores, key)
                 else:
                     dict_result[key] = max(key_values, key=value_to_float)  # type: ignore
             return _reduced_score(dict_result, scores)
@@ -374,24 +378,23 @@ def _count_dict(
     if len(dict_scores) == 0:
         return _nan_score(scores)
 
-    dict_result: dict[str, str | int | float | bool] = {}
+    dict_result: dict[str, str | int | float | bool | None] = {}
     keys = dict_scores[0].value.keys()  # type: ignore
     for key in keys:
         key_values = []
         for score in dict_scores:
             key_value = cast(str | int | float | bool, score.value[key])  # type: ignore
-            if _is_reducible(key_value):
+            # None is missing (see mean_score), so it is not a vote for None
+            if _has_value(key_value):
                 key_values.append(key_value)
 
-        # there are no reducible values
+        # nothing present to count (only None and/or NaN)
         if len(key_values) == 0:
-            dict_result[key] = float("nan")
+            dict_result[key] = _missing_key_value(dict_scores, key)
         else:
             counts: Counter[str | int | float | bool] = Counter(key_values)
             dict_result[key] = counter_fn(counts)
-    return _reduced_score(
-        cast(dict[str, str | int | float | bool | None], dict_result), scores
-    )
+    return _reduced_score(dict_result, scores)
 
 
 def _count_list(
@@ -719,3 +722,20 @@ def _nan_score(scores: list[Score]) -> Score:
 def _is_reducible(value: str | int | float | bool) -> bool:
     """Check if a value is reducible (not a NaN float)."""
     return not (isinstance(value, float) and math.isnan(value))
+
+
+def _has_value(value: str | int | float | bool | None) -> bool:
+    """Check if a dictionary score value is present: neither missing (None) nor NaN."""
+    return value is not None and _is_reducible(value)
+
+
+def _missing_key_value(dict_scores: list[Score], key: str) -> float | None:
+    """Return the reduced value for a key with nothing to reduce.
+
+    A key that is `None` on every score stays `None`, so a metric can still
+    apply its missing-value behavior. A key that was only NaN (or NaN mixed
+    with `None`) is the unscored sentinel, as in `_compute_dict_stat`.
+    """
+    if all(score.as_dict()[key] is None for score in dict_scores):
+        return None
+    return float("nan")

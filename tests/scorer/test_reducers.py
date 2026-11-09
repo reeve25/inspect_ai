@@ -365,6 +365,72 @@ def test_dict_stat_nan_key_stays_nan_when_mixed_with_none() -> None:
     assert _is_nan(reduced["x"])
 
 
+def test_dict_count_reducers_skip_none() -> None:
+    # None is missing for the counting reducers too: it is not a vote for
+    # None, and (for majority) it withholds a vote rather than casting one.
+    # Two judges that could not score a key must not outvote the one that did.
+    two_missing = [
+        Score(value={"a": None}),
+        Score(value={"a": None}),
+        Score(value={"a": 1}),
+    ]
+    assert mode_reducer(two_missing).value == {"a": 1}
+    reduced = majority_reducer(two_missing).value
+    assert isinstance(reduced, dict)
+    assert _is_nan(reduced["a"])  # 1 of 3 is not a majority
+
+    one_missing = [
+        Score(value={"a": None}),
+        Score(value={"a": 1}),
+        Score(value={"a": 1}),
+    ]
+    assert majority_reducer(one_missing).value == {"a": 1}  # 2 of 3
+    assert mode_reducer(one_missing).value == {"a": 1}
+
+    # at_least: None is not a value at or above the threshold (converted, it
+    # would be 0.0 and so clear a threshold of 0.0 that -1 does not)
+    at_least_1_of_zero = at_least(1, value=0.0)
+    assert at_least_1_of_zero(
+        [Score(value={"a": None}), Score(value={"a": -1})]
+    ).value == {"a": 0}
+    assert at_least_1_of_zero(
+        [Score(value={"a": None}), Score(value={"a": 0})]
+    ).value == {"a": 1}
+
+
+def test_max_reducer_dict_skips_none() -> None:
+    # None is missing, not 0.0: it must not beat a negative value, and a tie
+    # with 0.0 must not be decided by epoch order.
+    none_first = [Score(value={"x": None}), Score(value={"x": -1.0})]
+    assert max_reducer(none_first).value == {"x": -1.0}
+    assert max_reducer(list(reversed(none_first))).value == {"x": -1.0}
+    none_then_zero = [Score(value={"x": None}), Score(value={"x": 0.0})]
+    assert max_reducer(none_then_zero).value == {"x": 0.0}
+    assert max_reducer(list(reversed(none_then_zero))).value == {"x": 0.0}
+
+
+def test_dict_reducers_all_none_key_stays_none() -> None:
+    # As for mean_score: a key that is None on every score stays None so a
+    # metric can apply its missing-value behavior; a key that is only NaN,
+    # or NaN mixed with None, stays the unscored sentinel.
+    reducers = [max_reducer, mode_reducer, majority_reducer, at_least(1)]
+    all_none = [
+        Score(value={"x": None, "y": 1}),
+        Score(value={"x": None, "y": 1}),
+        Score(value=float("nan")),  # unscored at the root: withholds every key
+    ]
+    for reducer in reducers:
+        reduced = reducer(all_none).value
+        assert isinstance(reduced, dict)
+        assert reduced["x"] is None
+        assert reduced["y"] == 1
+    nan_and_none = [Score(value={"x": float("nan")}), Score(value={"x": None})]
+    for reducer in reducers:
+        reduced = reducer(nan_and_none).value
+        assert isinstance(reduced, dict)
+        assert _is_nan(reduced["x"])
+
+
 def test_score_unscored() -> None:
     # Score.unscored() constructs a NaN-valued Score and preserves
     # answer/explanation/metadata.
