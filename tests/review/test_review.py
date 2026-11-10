@@ -686,6 +686,39 @@ async def test_reviewer_inference_is_exempt_from_limits() -> None:
     assert turns.usage == 0
 
 
+async def test_reviewer_inference_is_exempt_from_cost_limit() -> None:
+    from inspect_ai.model._model_data.model_data import ModelCost, ModelInfo
+    from inspect_ai.model._model_info import clear_model_info_cache, set_model_info
+    from inspect_ai.util._limit import cost_limit
+
+    clear_model_info_cache()
+    set_model_info(
+        "mockllm/model",
+        ModelInfo(
+            cost=ModelCost(
+                input=1_000_000.0,
+                output=1_000_000.0,
+                input_cache_write=0.0,
+                input_cache_read=0.0,
+            )
+        ),
+    )
+    try:
+        with cost_limit(1_000_000.0) as cost:
+            await get_model("mockllm/model").generate("Hello")
+            charged = cost.usage
+            assert charged > 0
+
+            messages = await execute_addition(
+                [ReviewPolicy(generating_reviewer(), "*")]
+            )
+
+        assert tool_message(messages).error is None
+        assert cost.usage == charged
+    finally:
+        clear_model_info_cache()
+
+
 # --- configuration -----------------------------------------------------------
 
 

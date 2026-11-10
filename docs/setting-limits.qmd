@@ -531,7 +531,7 @@ def myagent(budget: float = 2.00) -> Agent:
             ...
 ```
 
-Cost limits work similarly to token limits, with stacking and tracking of costs used while the context manager is open.
+Cost limits work similarly to token limits, with stacking and tracking of costs used while the context manager is open. To run generations whose cost should not count against any active cost limit, use `suspend_cost_limit()`, which works like `suspend_token_limit()`. Inspect does this for model inference inside tool approvers, reviewers and sentinels.
 
 ::: callout-important
 Using `cost_limit()` requires model cost data to be configured via `set_model_cost()` or `--model-cost-config`. See [Model Cost](#model-cost) for details.

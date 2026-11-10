@@ -574,6 +574,52 @@ async def test_approver_inference_exempt_from_limits():
     assert turns.usage == 0
 
 
+async def test_approver_inference_exempt_from_cost_limit():
+    """Model inference within an approver shouldn't be charged to the cost limit."""
+    from inspect_ai.model._call_tools import execute_tools
+    from inspect_ai.model._chat_message import ChatMessageAssistant, ChatMessageTool
+    from inspect_ai.model._model_data.model_data import ModelCost, ModelInfo
+    from inspect_ai.model._model_info import clear_model_info_cache, set_model_info
+    from inspect_ai.tool._tool_def import ToolDef
+    from inspect_ai.util._limit import cost_limit
+
+    clear_model_info_cache()
+    set_model_info(
+        "mockllm/model",
+        ModelInfo(
+            cost=ModelCost(
+                input=1_000_000.0,
+                output=1_000_000.0,
+                input_cache_write=0.0,
+                input_cache_read=0.0,
+            )
+        ),
+    )
+    try:
+        tool_def = ToolDef(addition())
+        call = ToolCall(id="test", function="addition", arguments={"x": 1, "y": 1})
+
+        with cost_limit(1_000_000.0) as cost:
+            # a generation outside the approver is charged (the model is priced)
+            await get_model("mockllm/model").generate("Hello")
+            charged = cost.usage
+            assert charged > 0
+
+            messages, _ = await execute_tools(
+                [ChatMessageAssistant(content=[], tool_calls=[call])],
+                [tool_def],
+                approval=[ApprovalPolicy(approver=generating_approver(), tools="*")],
+            )
+
+        assert isinstance(messages[-1], ChatMessageTool)
+        assert messages[-1].error is None
+
+        # the approver's generation was not charged
+        assert cost.usage == charged
+    finally:
+        clear_model_info_cache()
+
+
 def test_approval_policy_comma_separated_tools():
     policy = ApprovalPolicy(
         approver=auto_approver(), tools="custom_tool*, addition, python"

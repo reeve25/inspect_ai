@@ -697,7 +697,11 @@ def record_model_cost(cost: float) -> None:
     """Record model cost against any active cost limits.
 
     Does not check if the limit has been exceeded.
+
+    No-op when cost limits are suspended (see `suspend_cost_limit()`).
     """
+    if cost_limit_tree.is_suspended():
+        return
     node = cost_limit_tree.get()
     if node is None:
         return
@@ -711,14 +715,46 @@ def check_cost_limit(raise_for_equal: bool = False) -> None:
 
     Note that all active cost limits are checked, not just the most recent one.
 
+    No-op when cost limits are suspended (see `suspend_cost_limit()`).
+
     Args:
       raise_for_equal: If True, also raise when cost equals a limit (used before a
         model call, which is guaranteed to exceed a limit that has been reached).
     """
+    if cost_limit_tree.is_suspended():
+        return
     node = cost_limit_tree.get()
     if node is None:
         return
     node.check(raise_for_equal)
+
+
+def suspend_cost_limit() -> AbstractContextManager[None]:
+    """Suspend cost limit metering within a block of code.
+
+    While this context manager is open:
+
+    - Model cost is not recorded against any active `cost_limit()` scope
+      (including sample-level, agent-scoped, and arbitrary block limits).
+    - Calls to `check_cost_limit()` are no-ops.
+    - This applies to any `cost_limit()` contexts opened inside the block
+      as well — suspension wins over nested limits.
+
+    Useful for running model generations whose cost should not count against
+    an agent's budget, e.g. one-shot summarization, routing, or auxiliary
+    planning calls.
+
+    Example:
+        with cost_limit(2.00):
+            # cost counts against the $2 budget
+            await generate()
+            with suspend_cost_limit():
+                # cost here does not count
+                await expensive_summary()
+            # cost counts again
+            await generate()
+    """
+    return cost_limit_tree.suspended()
 
 
 def message_limit(limit: int | None) -> _MessageLimit:

@@ -11,6 +11,7 @@ from inspect_ai.tool._tool_call import (
     resolve_tool_call_view,
 )
 from inspect_ai.util._limit import (
+    suspend_cost_limit,
     suspend_token_limit,
     suspend_turn_limit,
     suspend_working_limit,
@@ -46,6 +47,7 @@ async def apply_tool_review(
     with (
         suspend_token_limit(),
         suspend_turn_limit(),
+        suspend_cost_limit(),
         suspend_working_limit(),
         sentinel_scope("review", final=True),
     ):

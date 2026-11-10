@@ -20,6 +20,7 @@ from inspect_ai.util._limit import (
     check_cost_limit,
     cost_limit,
     record_model_cost,
+    suspend_cost_limit,
     token_limit,
 )
 
@@ -279,6 +280,80 @@ async def test_token_limit_raise_charges_cost_once() -> None:
     assert exc_info.value.type == "token"
     assert len(calls) == 1
     assert limit.usage == pytest.approx(10.0)
+
+
+def test_suspend_cost_limit_skips_recording_and_check() -> None:
+    with cost_limit(1.0) as limit:
+        with suspend_cost_limit():
+            _consume_cost(10.0)
+        assert limit.usage == 0
+
+
+def test_suspend_cost_limit_skips_check_with_explicit_check() -> None:
+    with cost_limit(1.0):
+        with suspend_cost_limit():
+            record_model_cost(10.0)
+            check_cost_limit(raise_for_equal=True)
+
+
+def test_suspend_cost_limit_resumes_metering_on_exit() -> None:
+    with cost_limit(1.0) as limit:
+        with suspend_cost_limit():
+            _consume_cost(10.0)
+
+        assert limit.usage == 0
+
+        with pytest.raises(LimitExceededError):
+            _consume_cost(1.5)
+
+
+def test_suspend_cost_limit_with_no_active_limit() -> None:
+    with suspend_cost_limit():
+        _consume_cost(10.0)
+
+
+def test_suspend_cost_limit_hides_inner_cost_limit() -> None:
+    with cost_limit(1.0) as outer:
+        with suspend_cost_limit():
+            with cost_limit(0.5) as inner:
+                _consume_cost(10.0)
+            assert inner.usage == 0
+        assert outer.usage == 0
+
+
+def test_suspend_cost_limit_exception_restores_state() -> None:
+    with cost_limit(1.0) as limit:
+        with pytest.raises(RuntimeError):
+            with suspend_cost_limit():
+                _consume_cost(10.0)
+                raise RuntimeError("boom")
+
+        with pytest.raises(LimitExceededError):
+            _consume_cost(1.5)
+
+        assert limit.usage == 1.5
+
+
+@pytest.mark.usefixtures("ten_dollar_calls")
+async def test_suspend_cost_limit_exempts_generate() -> None:
+    calls: list[list[ChatMessage]] = []
+    model = _priced_model(calls)
+
+    with cost_limit(10.0) as limit:
+        # the first call reaches the limit
+        await model.generate("")
+        assert limit.usage == pytest.approx(10.0)
+
+        # a suspended call is still dispatched and not charged
+        with suspend_cost_limit():
+            await model.generate("")
+        assert limit.usage == pytest.approx(10.0)
+
+        # metering resumes: the next call is refused before dispatch
+        with pytest.raises(LimitExceededError):
+            await model.generate("")
+
+    assert len(calls) == 2
 
 
 def _consume_cost(amount: float) -> None:

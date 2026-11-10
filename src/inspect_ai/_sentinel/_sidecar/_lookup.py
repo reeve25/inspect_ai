@@ -7,6 +7,7 @@ import anyio
 
 from inspect_ai._util.exception import SampleRefusedError
 from inspect_ai.util._limit import (
+    suspend_cost_limit,
     suspend_token_limit,
     suspend_turn_limit,
     suspend_working_limit,
@@ -48,7 +49,7 @@ class Looked(NamedTuple):
 async def request_result(received: ReceivedCall, replied: bool) -> Looked:
     """Ask the sidecar what it decided of the call's latest attempt, and keep the answer, waiting while it is still judging.
 
-    The sidecar holds each answer while the call is still being judged, up to `RESULT_WAIT`, and Inspect asks again while it is. While Inspect waits, the sample's token, turn and working limits are paused, as they are while an in-process sentinel runs; its time limit still applies. A state other than judging, including one this version doesn't know, is an answer.
+    The sidecar holds each answer while the call is still being judged, up to `RESULT_WAIT`, and Inspect asks again while it is. While Inspect waits, the sample's token, turn, cost and working limits are paused, as they are while an in-process sentinel runs; its time limit still applies. A state other than judging, including one this version doesn't know, is an answer.
 
     Args:
         received: What is kept of the call, where the answer is kept too.
@@ -68,7 +69,12 @@ async def _request_result(received: ReceivedCall, replied: bool) -> Looked:
     sidecar = received.sidecar
     if sidecar is None or received.request_id is None:
         return Looked("unavailable", "the call's request id is not known")
-    with suspend_token_limit(), suspend_turn_limit(), suspend_working_limit():
+    with (
+        suspend_token_limit(),
+        suspend_turn_limit(),
+        suspend_cost_limit(),
+        suspend_working_limit(),
+    ):
         while True:
             asked = time.monotonic()
             try:
