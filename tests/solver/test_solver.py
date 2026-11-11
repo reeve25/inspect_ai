@@ -240,3 +240,51 @@ def test_task_state_input_text_non_text_user_message():
 
     # no content parts at all: genuinely empty
     assert input_text([]) == ""
+
+
+def test_task_state_tools_setter_keeps_tools_assigned_from_themselves():
+    from test_helpers.tools import addition, read_file
+
+    add, read = addition(), read_file()
+    state = TaskState(
+        model=ModelName("mockllm/model"), sample_id=1, epoch=1, input="", messages=[]
+    )
+    state.tools = [add, read]
+    tools = state.tools
+
+    # the right-hand side is the current list itself
+    state.tools = state.tools
+    assert state.tools == [add, read]
+
+    # the "default when empty" idiom returns the current list when it is non-empty
+    state.tools = state.tools or [add]
+    assert state.tools == [add, read]
+
+    # the list object handed out earlier still holds the current tools (identity
+    # is kept on purpose; this held before the fix too)
+    assert state.tools is tools
+
+
+def test_task_state_tools_setter_resolves_tool_defs_before_replacing():
+    from test_helpers.tools import addition, read_file
+
+    from inspect_ai.tool import Tool, ToolDef
+
+    class FailingToolDef(ToolDef):
+        def as_tool(self) -> Tool:
+            raise RuntimeError("cannot build tool")
+
+    add, read = addition(), read_file()
+    state = TaskState(
+        model=ModelName("mockllm/model"), sample_id=1, epoch=1, input="", messages=[]
+    )
+    state.tools = [add]
+
+    # a failing ToolDef leaves the previous tools in place, not half of the new ones
+    with pytest.raises(RuntimeError, match="cannot build tool"):
+        state.tools = [read, FailingToolDef(read)]
+    assert state.tools == [add]
+
+    # ToolDef entries are still resolved to their tool
+    state.tools = [ToolDef(read)]
+    assert state.tools == [read]

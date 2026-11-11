@@ -300,9 +300,11 @@ class TaskState:
 
     @tools.setter
     def tools(self, tools: Sequence[Tool | ToolDef]) -> None:
-        self._tools.clear()
-        for tool in tools:
-            self._tools.append(tool if isinstance(tool, Tool) else tool.as_tool())
+        # resolve first: `tools` may be the current list (or a view of it)
+        resolved = [
+            tool if isinstance(tool, Tool) else tool.as_tool() for tool in tools
+        ]
+        self._tools[:] = resolved
 
     tool_choice: ToolChoice | None = None
     """Tool choice directive."""
